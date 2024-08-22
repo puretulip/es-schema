@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
 
 	"github.com/apache/arrow/go/v10/arrow"
 	"github.com/apache/arrow/go/v10/arrow/array"
@@ -32,6 +31,13 @@ func main() {
 		log.Fatalf("Error parsing JSON: %v", err)
 	}
 
+	// Arrow 스키마 생성
+	schema := createArrowSchema(esMapping["properties"].(map[string]interface{}))
+
+	// Arrow 스키마 출력
+	fmt.Println("Arrow Schema:")
+	fmt.Println(schema)
+
 	// 데이터 예제
 	data := []map[string]interface{}{
 		{
@@ -48,40 +54,11 @@ func main() {
 		},
 	}
 
-	// 필드 타입 파악
-	fieldTypes := make(map[string]reflect.Type)
-	for _, record := range data {
-		for key, value := range record {
-			valType := reflect.TypeOf(value)
-			if valType.Kind() == reflect.Slice {
-				elemType := valType.Elem()
-				if elemType.Kind() == reflect.Map {
-					fieldTypes[key] = reflect.TypeOf([]map[string]string{})
-				} else {
-					fieldTypes[key] = reflect.TypeOf([]string{})
-				}
-			} else {
-				fieldTypes[key] = valType
-			}
-		}
-	}
-
-	// Arrow Schema 동적 생성
-	var fields []arrow.Field
-	for key, valType := range fieldTypes {
-		fields = append(fields, createArrowField(key, valType))
-	}
-	schema := arrow.NewSchema(fields, nil)
-
 	// 필드 이름과 인덱스를 매핑
 	fieldIndex := make(map[string]int)
 	for i, field := range schema.Fields() {
 		fieldIndex[field.Name] = i
 	}
-
-	// Arrow Schema 출력
-	fmt.Println("Arrow Schema:")
-	fmt.Println(schema)
 
 	// 메모리 풀 생성
 	pool := memory.NewGoAllocator()
@@ -103,21 +80,27 @@ func main() {
 	fmt.Println(record)
 }
 
-func createArrowField(name string, valType reflect.Type) arrow.Field {
-	switch valType.Kind() {
-	case reflect.Slice:
-		elemType := valType.Elem()
-		if elemType.Kind() == reflect.Map {
-			return arrow.Field{Name: name, Type: arrow.ListOfField(createArrowField("activity", elemType))}
+func createArrowSchema(properties map[string]interface{}) *arrow.Schema {
+	var fields []arrow.Field
+	for key, val := range properties {
+		fieldType := val.(map[string]interface{})
+		fields = append(fields, createArrowField(key, fieldType))
+	}
+	return arrow.NewSchema(fields, nil)
+}
+
+func createArrowField(name string, fieldType map[string]interface{}) arrow.Field {
+	switch fieldType["type"] {
+	case "text":
+		return arrow.Field{Name: name, Type: arrow.BinaryTypes.String}
+	case "nested":
+		nestedProperties := fieldType["properties"].(map[string]interface{})
+		var nestedFields []arrow.Field
+		for nestedKey, nestedVal := range nestedProperties {
+			nestedFieldType := nestedVal.(map[string]interface{})
+			nestedFields = append(nestedFields, createArrowField(nestedKey, nestedFieldType))
 		}
-		return arrow.Field{Name: name, Type: arrow.ListOf(arrow.BinaryTypes.String)}
-	case reflect.Map:
-		var fields []arrow.Field
-		for i := 0; i < valType.NumField(); i++ {
-			field := valType.Field(i)
-			fields = append(fields, createArrowField(field.Name, field.Type))
-		}
-		return arrow.Field{Name: name, Type: arrow.StructOf(fields...)}
+		return arrow.Field{Name: name, Type: arrow.StructOf(nestedFields...)}
 	default:
 		return arrow.Field{Name: name, Type: arrow.BinaryTypes.String}
 	}
