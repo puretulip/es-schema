@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 
 	"github.com/apache/arrow/go/v10/arrow"
 	"github.com/apache/arrow/go/v10/arrow/array"
@@ -31,14 +32,52 @@ func main() {
 		log.Fatalf("Error parsing JSON: %v", err)
 	}
 
-	// Arrow Schema 정의
-	fields := []arrow.Field{
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "hobbies", Type: arrow.StructOf(
-			arrow.Field{Name: "activity", Type: arrow.BinaryTypes.String},
-		)},
+	// 데이터 예제
+	data := []map[string]interface{}{
+		{
+			"name":    "Bob",
+			"hobbies": map[string]string{"activity": "cycling"}, // 리스트가 아닌 단일 값
+		},
+		{
+			"name":    "Alice",
+			"hobbies": []map[string]string{{"activity": "reading books"}, {"activity": "playing piano"}},
+		},
+		{
+			"name":    []string{"Charlie", "Charles"}, // name 필드가 리스트인 경우
+			"hobbies": []map[string]string{{"activity": "swimming"}, {"activity": "running"}},
+		},
+	}
+
+	// 필드 타입 파악
+	fieldTypes := make(map[string]reflect.Type)
+	for _, record := range data {
+		for key, value := range record {
+			valType := reflect.TypeOf(value)
+			if valType.Kind() == reflect.Slice {
+				elemType := valType.Elem()
+				if elemType.Kind() == reflect.Map {
+					fieldTypes[key] = reflect.TypeOf([]map[string]string{})
+				} else {
+					fieldTypes[key] = reflect.TypeOf([]string{})
+				}
+			} else {
+				fieldTypes[key] = valType
+			}
+		}
+	}
+
+	// Arrow Schema 동적 생성
+	var fields []arrow.Field
+	for key, valType := range fieldTypes {
+		fields = append(fields, createArrowField(key, valType))
 	}
 	schema := arrow.NewSchema(fields, nil)
+
+	// 필드 이름과 인덱스를 매핑
+	fieldIndex := make(map[string]int)
+	for i, field := range schema.Fields() {
+		fieldIndex[field.Name] = i
+	}
 
 	// Arrow Schema 출력
 	fmt.Println("Arrow Schema:")
@@ -51,15 +90,78 @@ func main() {
 	b := array.NewRecordBuilder(pool, schema)
 	defer b.Release()
 
-	b.Field(0).(*array.StringBuilder).Append("John Doe")
-	hobbiesBuilder := b.Field(1).(*array.StructBuilder)
-	hobbiesBuilder.Append(true)
-	activityBuilder := hobbiesBuilder.FieldBuilder(0).(*array.StringBuilder)
-	activityBuilder.Append("Reading")
+	for _, record := range data {
+		for key, value := range record {
+			appendValue(b, fieldIndex, key, value)
+		}
+	}
 
 	record := b.NewRecord()
 	defer record.Release()
 
 	fmt.Println("Record:")
 	fmt.Println(record)
+}
+
+func createArrowField(name string, valType reflect.Type) arrow.Field {
+	switch valType.Kind() {
+	case reflect.Slice:
+		elemType := valType.Elem()
+		if elemType.Kind() == reflect.Map {
+			return arrow.Field{Name: name, Type: arrow.ListOfField(createArrowField("activity", elemType))}
+		}
+		return arrow.Field{Name: name, Type: arrow.ListOf(arrow.BinaryTypes.String)}
+	case reflect.Map:
+		var fields []arrow.Field
+		for i := 0; i < valType.NumField(); i++ {
+			field := valType.Field(i)
+			fields = append(fields, createArrowField(field.Name, field.Type))
+		}
+		return arrow.Field{Name: name, Type: arrow.StructOf(fields...)}
+	default:
+		return arrow.Field{Name: name, Type: arrow.BinaryTypes.String}
+	}
+}
+
+func appendValue(b *array.RecordBuilder, fieldIndex map[string]int, key string, value interface{}) {
+	switch v := value.(type) {
+	case string:
+		b.Field(fieldIndex[key]).(*array.StringBuilder).Append(v)
+	case []string:
+		listBuilder := b.Field(fieldIndex[key]).(*array.ListBuilder)
+		listBuilder.Append(true)
+		strBuilder := listBuilder.ValueBuilder().(*array.StringBuilder)
+		for _, s := range v {
+			strBuilder.Append(s)
+		}
+	case map[string]string:
+		structBuilder := b.Field(fieldIndex[key]).(*array.StructBuilder)
+		structBuilder.Append(true)
+		for k, val := range v {
+			appendStructValue(structBuilder, k, val)
+		}
+	case []map[string]string:
+		listBuilder := b.Field(fieldIndex[key]).(*array.ListBuilder)
+		listBuilder.Append(true)
+		structBuilder := listBuilder.ValueBuilder().(*array.StructBuilder)
+		for _, m := range v {
+			structBuilder.Append(true)
+			for k, val := range m {
+				appendStructValue(structBuilder, k, val)
+			}
+		}
+	}
+}
+
+func appendStructValue(structBuilder *array.StructBuilder, key string, value interface{}) {
+	structType := structBuilder.Type().(*arrow.StructType)
+	fieldIndex := make(map[string]int)
+	for i, field := range structType.Fields() {
+		fieldIndex[field.Name] = i
+	}
+
+	switch v := value.(type) {
+	case string:
+		structBuilder.FieldBuilder(fieldIndex[key]).(*array.StringBuilder).Append(v)
+	}
 }
