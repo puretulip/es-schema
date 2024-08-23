@@ -11,21 +11,31 @@ import (
 func main() {
 	// JSON 매핑 테이블
 	mapping := `{
-        "properties": {
-            "hobbies": {
-                "properties": {
-                    "activity": { "type": "text" }
-                },
-                "type": "nested"
+    "properties": {
+        "user": {
+            "properties": {
+                "name": { "type": "text" },
+                "address": {
+                    "type": "nested",
+                    "properties": {
+                        "street": { "type": "text" },
+                        "city": { "type": "text" },
+                        "zipcode": { "type": "integer" },
+                        "geo": {
+                            "type": "nested",
+                            "properties": {
+                                "lat": { "type": "float" },
+                                "lon": { "type": "float" }
+                            }
+                        }
+                    }
+                }
             },
-            "name": { "type": "text" },
-            "age": { "type": "integer" },
-            "height": { "type": "float" },
-            "is_active": { "type": "boolean" },
-            "birthdate": { "type": "date" },
-            "vector": { "type": "dense_vector", "dims": 3 }
-        }
-    }`
+            "type": "nested"
+        },
+        "timestamp": { "type": "date" }
+    }
+}`
 
 	// JSON 파싱
 	var esMapping map[string]interface{}
