@@ -6,8 +6,6 @@ import (
 	"log"
 
 	"github.com/apache/arrow/go/v10/arrow"
-	"github.com/apache/arrow/go/v10/arrow/array"
-	"github.com/apache/arrow/go/v10/arrow/memory"
 )
 
 func main() {
@@ -20,7 +18,12 @@ func main() {
                 },
                 "type": "nested"
             },
-            "name": { "type": "text" }
+            "name": { "type": "text" },
+            "age": { "type": "integer" },
+            "height": { "type": "float" },
+            "is_active": { "type": "boolean" },
+            "birthdate": { "type": "date" },
+            "vector": { "type": "dense_vector", "dims": 3 }
         }
     }`
 
@@ -32,119 +35,54 @@ func main() {
 	}
 
 	// Arrow 스키마 생성
-	schema := createArrowSchema(esMapping["properties"].(map[string]interface{}))
-
-	// Arrow 스키마 출력
-	fmt.Println("Arrow Schema:")
+	fields := parseProperties(esMapping["properties"].(map[string]interface{}))
+	schema := arrow.NewSchema(fields, nil)
 	fmt.Println(schema)
-
-	// 데이터 예제
-	data := []map[string]interface{}{
-		{
-			"name":    "Bob",
-			"hobbies": map[string]string{"activity": "cycling"}, // 리스트가 아닌 단일 값
-		},
-		{
-			"name":    "Alice",
-			"hobbies": []map[string]string{{"activity": "reading books"}, {"activity": "playing piano"}},
-		},
-		{
-			"name":    []string{"Charlie", "Charles"}, // name 필드가 리스트인 경우
-			"hobbies": []map[string]string{{"activity": "swimming"}, {"activity": "running"}},
-		},
-	}
-
-	// 필드 이름과 인덱스를 매핑
-	fieldIndex := make(map[string]int)
-	for i, field := range schema.Fields() {
-		fieldIndex[field.Name] = i
-	}
-
-	// 메모리 풀 생성
-	pool := memory.NewGoAllocator()
-
-	// 예제 데이터 생성
-	b := array.NewRecordBuilder(pool, schema)
-	defer b.Release()
-
-	for _, record := range data {
-		for key, value := range record {
-			appendValue(b, fieldIndex, key, value)
-		}
-	}
-
-	record := b.NewRecord()
-	defer record.Release()
-
-	fmt.Println("Record:")
-	fmt.Println(record)
 }
 
-func createArrowSchema(properties map[string]interface{}) *arrow.Schema {
-	var fields []arrow.Field
-	for key, val := range properties {
-		fieldType := val.(map[string]interface{})
-		fields = append(fields, createArrowField(key, fieldType))
+// parseProperties 함수는 주어진 properties 맵을 순회하여 Arrow 필드 목록을 생성합니다.
+func parseProperties(properties map[string]interface{}) []arrow.Field {
+	fields := []arrow.Field{}
+	for fieldName, fieldProperties := range properties {
+		fieldProps := fieldProperties.(map[string]interface{})
+		fieldType := fieldProps["type"].(string)
+		arrowType := esTypeToArrowType(fieldType, fieldProps)
+		fields = append(fields, arrow.Field{Name: fieldName, Type: arrowType})
 	}
-	return arrow.NewSchema(fields, nil)
+	return fields
 }
 
-func createArrowField(name string, fieldType map[string]interface{}) arrow.Field {
-	switch fieldType["type"] {
-	case "text":
-		return arrow.Field{Name: name, Type: arrow.BinaryTypes.String}
-	case "nested":
-		nestedProperties := fieldType["properties"].(map[string]interface{})
-		var nestedFields []arrow.Field
-		for nestedKey, nestedVal := range nestedProperties {
-			nestedFieldType := nestedVal.(map[string]interface{})
-			nestedFields = append(nestedFields, createArrowField(nestedKey, nestedFieldType))
+// esTypeToArrowType 함수는 Elasticsearch 타입을 Arrow 타입으로 매핑합니다.
+func esTypeToArrowType(esType string, fieldProps map[string]interface{}) arrow.DataType {
+	switch esType {
+	case "text", "keyword":
+		return arrow.BinaryTypes.String
+	case "integer":
+		return arrow.PrimitiveTypes.Int32
+	case "long":
+		return arrow.PrimitiveTypes.Int64
+	case "float":
+		return arrow.PrimitiveTypes.Float32
+	case "double":
+		return arrow.PrimitiveTypes.Float64
+	case "boolean":
+		return arrow.FixedWidthTypes.Boolean
+	case "date":
+		// Date 타입은 Arrow의 timestamp 타입으로 매핑합니다.
+		return arrow.FixedWidthTypes.Timestamp_ms
+	case "dense_vector":
+		// Dense vector 타입은 Arrow의 fixed-size list 타입으로 매핑합니다.
+		if dims, ok := fieldProps["dims"].(float64); ok {
+			return arrow.FixedSizeListOf(int32(dims), arrow.PrimitiveTypes.Float32)
 		}
-		return arrow.Field{Name: name, Type: arrow.StructOf(nestedFields...)}
+		return arrow.FixedSizeListOf(0, arrow.PrimitiveTypes.Float32)
+	case "nested", "object":
+		// Nested 또는 Object 타입은 재귀적으로 처리합니다.
+		if properties, ok := fieldProps["properties"].(map[string]interface{}); ok {
+			return arrow.StructOf(parseProperties(properties)...)
+		}
+		return arrow.StructOf()
 	default:
-		return arrow.Field{Name: name, Type: arrow.BinaryTypes.String}
-	}
-}
-
-func appendValue(b *array.RecordBuilder, fieldIndex map[string]int, key string, value interface{}) {
-	switch v := value.(type) {
-	case string:
-		b.Field(fieldIndex[key]).(*array.StringBuilder).Append(v)
-	case []string:
-		listBuilder := b.Field(fieldIndex[key]).(*array.ListBuilder)
-		listBuilder.Append(true)
-		strBuilder := listBuilder.ValueBuilder().(*array.StringBuilder)
-		for _, s := range v {
-			strBuilder.Append(s)
-		}
-	case map[string]string:
-		structBuilder := b.Field(fieldIndex[key]).(*array.StructBuilder)
-		structBuilder.Append(true)
-		for k, val := range v {
-			appendStructValue(structBuilder, k, val)
-		}
-	case []map[string]string:
-		listBuilder := b.Field(fieldIndex[key]).(*array.ListBuilder)
-		listBuilder.Append(true)
-		structBuilder := listBuilder.ValueBuilder().(*array.StructBuilder)
-		for _, m := range v {
-			structBuilder.Append(true)
-			for k, val := range m {
-				appendStructValue(structBuilder, k, val)
-			}
-		}
-	}
-}
-
-func appendStructValue(structBuilder *array.StructBuilder, key string, value interface{}) {
-	structType := structBuilder.Type().(*arrow.StructType)
-	fieldIndex := make(map[string]int)
-	for i, field := range structType.Fields() {
-		fieldIndex[field.Name] = i
-	}
-
-	switch v := value.(type) {
-	case string:
-		structBuilder.FieldBuilder(fieldIndex[key]).(*array.StringBuilder).Append(v)
+		return arrow.BinaryTypes.String
 	}
 }
