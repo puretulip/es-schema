@@ -55,7 +55,11 @@ func parseProperties(properties map[string]interface{}) []arrow.Field {
 	fields := []arrow.Field{}
 	for fieldName, fieldProperties := range properties {
 		fieldProps := fieldProperties.(map[string]interface{})
-		fieldType := fieldProps["type"].(string)
+		fieldType, ok := fieldProps["type"].(string)
+		if !ok {
+			// "type"이 없는 경우 "object"로 가정
+			fieldType = "object"
+		}
 		arrowType := esTypeToArrowType(fieldType, fieldProps)
 		fields = append(fields, arrow.Field{Name: fieldName, Type: arrowType})
 	}
