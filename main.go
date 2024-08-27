@@ -141,7 +141,7 @@ func generateSampleData() []map[string]interface{} {
 					"city":    "Chicago",
 					"zipcode": 60601,
 				},
-				"tags":   []string{"manager", "agile"},
+				"tags":   "manager",
 				"scores": []float32{79.0, 82.5, 91.0, 87.5},
 			},
 			"timestamp": time.Now().Add(-48 * time.Hour),
@@ -415,23 +415,23 @@ func appendValue(builder array.Builder, value interface{}, schema *arrow.Schema)
 			b.AppendNull()
 		}
 	case *array.ListBuilder:
-		if v, ok := value.([]interface{}); ok {
-			b.Append(true)
+		b.Append(true)
+		switch v := value.(type) {
+		case []interface{}:
 			for _, item := range v {
 				appendValue(b.ValueBuilder(), item, schema)
 			}
-		} else if v, ok := value.([]string); ok {
-			b.Append(true)
+		case []string:
 			for _, item := range v {
 				appendValue(b.ValueBuilder(), item, schema)
 			}
-		} else if v, ok := value.([]float32); ok {
-			b.Append(true)
+		case []float32:
 			for _, item := range v {
 				appendValue(b.ValueBuilder(), item, schema)
 			}
-		} else {
-			b.AppendNull()
+		default:
+			// 단일 값을 리스트의 단일 요소로 처리
+			appendValue(b.ValueBuilder(), value, schema)
 		}
 	default:
 		builder.AppendNull()
