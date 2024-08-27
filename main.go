@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
 	"time"
 
 	"github.com/apache/arrow/go/v10/arrow"
 	"github.com/apache/arrow/go/v10/arrow/array"
 	"github.com/apache/arrow/go/v10/arrow/memory"
+	"github.com/apache/arrow/go/v10/parquet"
+	"github.com/apache/arrow/go/v10/parquet/compress"
+	"github.com/apache/arrow/go/v10/parquet/pqarrow"
 )
 
 func main() {
@@ -69,6 +73,36 @@ func main() {
 	record := createArrowRecord(adjustedSchema, sampleData)
 
 	fmt.Println("\nArrow Record:", record)
+
+	// Parquet 파일로 저장
+	outputFile, err := os.Create("output.parquet")
+	if err != nil {
+		log.Fatalf("Failed to create output file: %v", err)
+	}
+	defer outputFile.Close()
+
+	writerProps := parquet.NewWriterProperties(parquet.WithCompression(compress.Codecs.Snappy))
+	arrowWriterProps := pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema())
+
+	writer, err := pqarrow.NewFileWriter(
+		record.Schema(),
+		outputFile,
+		writerProps,
+		arrowWriterProps,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create Parquet writer: %v", err)
+	}
+
+	if err := writer.Write(record); err != nil {
+		log.Fatalf("Failed to write record to Parquet file: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		log.Fatalf("Failed to close Parquet writer: %v", err)
+	}
+
+	fmt.Println("Parquet file created successfully: output.parquet")
 }
 
 func generateSampleData() []map[string]interface{} {
