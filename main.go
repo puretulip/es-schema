@@ -188,6 +188,7 @@ func esTypeToArrowType(esType string, fieldProps map[string]interface{}) arrow.D
 		if dims, ok := fieldProps["dims"].(float64); ok {
 			return arrow.FixedSizeListOf(int32(dims), arrow.PrimitiveTypes.Float32)
 		}
+		// dims가 지정되지 않은 경우 기본값으로 0을 사용
 		return arrow.FixedSizeListOf(0, arrow.PrimitiveTypes.Float32)
 	case "nested", "object":
 		// Nested 또는 Object 타입은 재귀적으로 처리합니다.
@@ -432,6 +433,35 @@ func appendValue(builder array.Builder, value interface{}, schema *arrow.Schema)
 		default:
 			// 단일 값을 리스트의 단일 요소로 처리
 			appendValue(b.ValueBuilder(), value, schema)
+		}
+	case *array.FixedSizeListBuilder:
+		listType := b.Type().(*arrow.FixedSizeListType)
+		listSize := int(listType.Len())
+		valueBuilder := b.ValueBuilder()
+
+		switch v := value.(type) {
+		case []float32:
+			if len(v) == listSize {
+				b.Append(true)
+				for _, item := range v {
+					valueBuilder.(*array.Float32Builder).Append(item)
+				}
+			} else {
+				// 길이가 맞지 않으면 null로 처리
+				b.AppendNull()
+			}
+		case []float64:
+			if len(v) == listSize {
+				b.Append(true)
+				for _, item := range v {
+					valueBuilder.(*array.Float32Builder).Append(float32(item))
+				}
+			} else {
+				b.AppendNull()
+			}
+		default:
+			// 다른 타입이거나 단일 값인 경우 null로 처리
+			b.AppendNull()
 		}
 	default:
 		builder.AppendNull()
